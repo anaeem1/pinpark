@@ -1,0 +1,311 @@
+<!-- ✂️ HEAD + STYLE remains same from previous code -->
+
+<!-- Inside <body> -->
+<div class="container">
+    <div class="header">
+        <h1>🅿️ PinPark Parking Spot Annotator</h1>
+        <p>Draw bounding boxes and log location & camera metadata</p>
+    </div>
+
+    <div class="main-content">
+        <div class="image-section">
+            <!-- File Upload -->
+            <div class="file-input">
+                <input type="file" id="imageInput" accept="image/*" class="btn btn-primary" />
+            </div>
+
+            <!-- Load JSON -->
+            <div class="file-load">
+                <input type="file" id="loadAnnotations" accept=".json" class="btn btn-secondary" />
+            </div>
+
+            <!-- Canvas -->
+            <div class="image-container">
+                <canvas id="imageCanvas"></canvas>
+            </div>
+
+            <!-- Status -->
+            <div id="status" class="status">Upload an image to get started</div>
+        </div>
+
+        <div class="controls-section">
+            <!-- Camera Info Form -->
+            <div class="controls">
+                <h3>Camera Metadata</h3>
+                <label>Camera ID: <input type="text" id="cameraId" class="btn" /></label><br />
+                <label>Camera Name: <input type="text" id="cameraName" class="btn" /></label><br /><br />
+
+                <button id="clearAll" class="btn btn-danger">Clear All Boxes</button>
+                <button id="toggleTool" class="btn btn-secondary">Toggle Tool (D or ESC)</button>
+                <button id="downloadCSV" class="btn btn-primary">Download CSV</button>
+                <button id="saveJSON" class="btn btn-primary">Download JSON</button>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats">
+                <strong>Total Annotations: <span id="totalCount">0</span></strong>
+            </div>
+
+            <!-- Annotations Table -->
+            <div>
+                <h3>Annotations</h3>
+                <div id="annotationsContainer"><p>No annotations yet</p></div>
+            </div>
+
+            <!-- Instructions -->
+            <div class="instructions">
+                <h4>Instructions:</h4>
+                <ul>
+                    <li>Upload image and enter camera info once</li>
+                    <li>Draw boxes, add ID + GPS per box</li>
+                    <li>Press ESC or D to toggle tool</li>
+                    <li>Download as CSV or JSON</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+class ParkingAnnotator {
+    constructor() {
+        this.canvas = document.getElementById('imageCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.status = document.getElementById('status');
+        this.totalCount = document.getElementById('totalCount');
+        this.annotationsContainer = document.getElementById('annotationsContainer');
+
+        this.isDrawing = false;
+        this.isActive = true;
+        this.startX = 0;
+        this.startY = 0;
+        this.boxes = [];
+        this.image = null;
+
+        this.initEventListeners();
+    }
+
+    initEventListeners() {
+        document.getElementById('imageInput').addEventListener('change', e => this.loadImage(e.target.files[0]));
+        document.getElementById('loadAnnotations').addEventListener('change', e => this.loadJSON(e));
+        document.getElementById('clearAll').addEventListener('click', () => this.clearAll());
+        document.getElementById('toggleTool').addEventListener('click', () => this.toggleTool());
+        document.getElementById('downloadCSV').addEventListener('click', () => this.downloadCSV());
+        document.getElementById('saveJSON').addEventListener('click', () => this.downloadJSON());
+        document.addEventListener('keydown', e => this.onKeyDown(e));
+        this.canvas.addEventListener('mousedown', e => this.onMouseDown(e));
+        this.canvas.addEventListener('mousemove', e => this.onMouseMove(e));
+        this.canvas.addEventListener('mouseup', e => this.onMouseUp(e));
+    }
+
+    loadImage(file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            this.image = new Image();
+            this.image.onload = () => {
+                this.canvas.width = this.image.width;
+                this.canvas.height = this.image.height;
+                this.redrawCanvas();
+                this.updateStatus('Image loaded');
+            };
+            this.image.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    getMousePos(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        return {
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY
+        };
+    }
+
+    onMouseDown(e) {
+        if (!this.isActive || !this.image) return;
+        const pos = this.getMousePos(e);
+        this.startX = pos.x;
+        this.startY = pos.y;
+        this.isDrawing = true;
+    }
+
+    onMouseMove(e) {
+        if (!this.isDrawing || !this.isActive) return;
+        const pos = this.getMousePos(e);
+        this.redrawCanvas();
+        this.ctx.strokeStyle = '#0000FF';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([5, 5]);
+        this.ctx.strokeRect(this.startX, this.startY, pos.x - this.startX, pos.y - this.startY);
+        this.ctx.setLineDash([]);
+    }
+
+    onMouseUp(e) {
+        if (!this.isDrawing || !this.isActive) return;
+        const pos = this.getMousePos(e);
+        const width = pos.x - this.startX;
+        const height = pos.y - this.startY;
+
+        if (Math.abs(width) > 10 && Math.abs(height) > 10) {
+            const id = prompt('Enter ID for this parking spot:');
+            const lat = prompt('Enter latitude:');
+            const lng = prompt('Enter longitude:');
+            const cameraId = document.getElementById('cameraId').value;
+            const cameraName = document.getElementById('cameraName').value;
+
+            if (!id || !lat || !lng || !cameraId || !cameraName) {
+                alert('Please fill all fields including camera ID/name.');
+                this.isDrawing = false;
+                this.redrawCanvas();
+                return;
+            }
+
+            const box = {
+                id: id.trim(),
+                x: Math.min(this.startX, pos.x),
+                y: Math.min(this.startY, pos.y),
+                w: Math.abs(width),
+                h: Math.abs(height),
+                lat: parseFloat(lat),
+                lng: parseFloat(lng),
+                cameraId: cameraId.trim(),
+                cameraName: cameraName.trim()
+            };
+
+            this.boxes.push(box);
+            this.updateAnnotationsList();
+            this.updateStatus(`Added: ${box.id}`);
+        }
+
+        this.isDrawing = false;
+        this.redrawCanvas();
+    }
+
+    redrawCanvas() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        if (this.image) this.ctx.drawImage(this.image, 0, 0);
+        this.boxes.forEach(box => {
+            this.drawBox(box);
+            this.drawLabel(box);
+        });
+    }
+
+    drawBox(box) {
+        this.ctx.strokeStyle = '#FF0000';
+        this.ctx.lineWidth = 2;
+        this.ctx.strokeRect(box.x, box.y, box.w, box.h);
+    }
+
+    drawLabel(box) {
+        const text = box.id;
+        this.ctx.font = '14px Arial';
+        const textWidth = this.ctx.measureText(text).width;
+        this.ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+        this.ctx.fillRect(box.x, box.y - 25, textWidth + 10, 20);
+        this.ctx.fillStyle = '#FFFFFF';
+        this.ctx.fillText(text, box.x + 5, box.y - 10);
+    }
+
+    updateAnnotationsList() {
+        this.totalCount.textContent = this.boxes.length;
+        if (this.boxes.length === 0) {
+            this.annotationsContainer.innerHTML = '<p>No annotations yet</p>';
+            return;
+        }
+
+        let html = '<table class="annotations-table"><thead><tr><th>ID</th><th>X</th><th>Y</th><th>W</th><th>H</th><th>Lat</th><th>Lng</th><th>Cam ID</th><th>Cam Name</th><th>Del</th></tr></thead><tbody>';
+        this.boxes.forEach((box, index) => {
+            html += `<tr>
+                <td>${box.id}</td><td>${Math.round(box.x)}</td><td>${Math.round(box.y)}</td>
+                <td>${Math.round(box.w)}</td><td>${Math.round(box.h)}</td>
+                <td>${box.lat}</td><td>${box.lng}</td>
+                <td>${box.cameraId}</td><td>${box.cameraName}</td>
+                <td><button onclick="annotator.deleteBox(${index})" class="btn btn-danger btn-sm">Delete</button></td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        this.annotationsContainer.innerHTML = html;
+    }
+
+    deleteBox(index) {
+        this.boxes.splice(index, 1);
+        this.redrawCanvas();
+        this.updateAnnotationsList();
+        this.updateStatus('Annotation deleted');
+    }
+
+    toggleTool() {
+        this.isActive = !this.isActive;
+        this.canvas.style.cursor = this.isActive ? 'crosshair' : 'default';
+        this.updateStatus(this.isActive ? 'Tool activated' : 'Tool deactivated');
+    }
+
+    clearAll() {
+        if (confirm('Are you sure you want to clear all annotations?')) {
+            this.boxes = [];
+            this.redrawCanvas();
+            this.updateAnnotationsList();
+            this.updateStatus('All annotations cleared');
+        }
+    }
+
+    updateStatus(msg) {
+        this.status.textContent = `Status: ${msg}`;
+    }
+
+    downloadCSV() {
+        if (this.boxes.length === 0) return alert('No data to export');
+        let csv = 'ID,X,Y,W,H,Lat,Lng,CameraID,CameraName\n';
+        this.boxes.forEach(b => {
+            csv += `${b.id},${b.x},${b.y},${b.w},${b.h},${b.lat},${b.lng},${b.cameraId},${b.cameraName}\n`;
+        });
+        this.downloadFile(csv, 'annotations.csv', 'text/csv');
+    }
+
+    downloadJSON() {
+        const json = JSON.stringify(this.boxes, null, 2);
+        this.downloadFile(json, 'annotations.json', 'application/json');
+    }
+
+    downloadFile(content, filename, type) {
+        const blob = new Blob([content], { type });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        a.click();
+    }
+
+    loadJSON(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = evt => {
+            try {
+                this.boxes = JSON.parse(evt.target.result);
+                this.redrawCanvas();
+                this.updateAnnotationsList();
+                this.updateStatus('Annotations loaded');
+            } catch {
+                alert('Invalid JSON');
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    onKeyDown(e) {
+        if (e.key === 'Escape' || e.key.toLowerCase() === 'd') {
+            if (this.isDrawing) {
+                this.isDrawing = false;
+                this.redrawCanvas();
+                this.updateStatus('Drawing canceled');
+            } else {
+                this.toggleTool();
+            }
+        }
+    }
+}
+
+const annotator = new ParkingAnnotator();
+</script>
